@@ -1,0 +1,53 @@
+@baseUrl = http://localhost:5080
+
+### Comprobar que la API funciona
+GET {{baseUrl}}/api/prueba
+Accept: application/json
+
+### Primera página
+GET {{baseUrl}}/api/datos?pagina=1
+Accept: application/json
+
+### Página inválida
+GET {{baseUrl}}/api/datos?pagina=0
+Accept: application/json
+
+### Página fuera del rango de los datos iniciales
+GET {{baseUrl}}/api/datos?pagina=5001
+Accept: application/json
+
+### Consultar por ID
+GET {{baseUrl}}/api/datos/1
+Accept: application/json
+
+### ID inválido
+GET {{baseUrl}}/api/datos/0
+Accept: application/json
+
+### ID inexistente en los datos iniciales
+GET {{baseUrl}}/api/datos/9223372036854775807
+Accept: application/json
+
+### Actualizar un registro existente (modifica los datos)
+PUT {{baseUrl}}/api/datos/1
+Content-Type: application/json
+
+{
+  "codigo": "COD-00001",
+  "secuencia": 1,
+  "fechaRecepcion": "2026-11-26T12:00:00",
+  "peso": 120.5,
+  "descripcion": "Descripción actualizada"
+}
+
+### Crear un registro (cambiar código o secuencia al repetir)
+POST {{baseUrl}}/api/datos
+Content-Type: application/json
+
+{
+  "codigo": "NUEVO-001",
+  "secuencia": 1,
+  "fechaRecepcion": "2026-11-26T12:00:00",
+  "peso": 90.25,
+  "descripcion": "Registro nuevo"
+}
