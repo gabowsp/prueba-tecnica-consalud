@@ -1,144 +1,114 @@
-# Prueba técnica — API .NET 8
+# API de la prueba técnica
 
-El proyecto usa una estructura hexagonal. Incluye el endpoint de prueba y el listado paginado conectado a Oracle. RabbitMQ recibe las notificaciones directamente después de guardar el dato.
+Desarrollé la API en .NET 8 para listar, consultar, crear, actualizar y eliminar registros en Oracle. Todas estas operaciones usan los procedimientos de `PKG_DATOS`.
+
+También agregué Swagger para probar los endpoints y el envío de mensajes a RabbitMQ cuando se crea un registro con peso mayor que 100,64.
 
 ## Estructura
 
-```text
-PruebaTecnica.sln
-src/
-  PruebaTecnica.Domain/
-  PruebaTecnica.Application/
-    Ports/Input/
-    Results/
-    UseCases/
-  PruebaTecnica.Infrastructure/
-  PruebaTecnica.Api/
-    Controllers/
-    Properties/
-    Program.cs
-```
+Separé el proyecto en cuatro capas:
 
-- **Domain:** entidades y reglas del negocio. No depende de otros proyectos.
-- **Application:** casos de uso y puertos (interfaces). Solo depende de Domain.
-- **Infrastructure:** adaptadores para servicios externos. Depende de Application, donde se definirán los puertos de salida.
-- **Api:** recibe las peticiones HTTP y conecta las implementaciones mediante inyección de dependencias.
+- **Domain:** datos y reglas del negocio.
+- **Application:** lógica de cada operación e interfaces.
+- **Infrastructure:** conexión a Oracle y publicación en RabbitMQ.
+- **Api:** controladores, validaciones de entrada y configuración.
 
-El controlador llama al puerto `IObtenerPrueba`. La clase `ObtenerPrueba` implementa ese puerto y devuelve el mensaje. El listado usa `IListarDatos` y `IDatosRepository`; infraestructura implementa el acceso a Oracle.
+El controlador recibe la petición, llama al caso de uso y este utiliza el repositorio para acceder a Oracle.
 
-## Ejecutar
+## Cómo ejecutar
 
-Se necesita el SDK .NET 8 y el runtime ASP.NET Core 8. Desde esta carpeta:
+Se necesita el SDK .NET 8, el runtime ASP.NET Core 8 y los contenedores de Oracle y RabbitMQ levantados. La preparación del entorno y los scripts SQL están en el [README principal](../README.md).
+
+Desde esta carpeta, ejecutar:
 
 ```bash
 dotnet build PruebaTecnica.sln
 dotnet run --project src/PruebaTecnica.Api
 ```
 
-Probar en http://localhost:5080/api/prueba o con:
+Para trabajar en VS Code, abrir esta carpeta completa e instalar la extensión C# de Microsoft. También se puede ejecutar y depurar con F5.
 
-```bash
-curl -i http://localhost:5080/api/prueba
-```
+Las conexiones se configuran en `src/PruebaTecnica.Api/appsettings.json`, en las secciones `ConnectionStrings:Oracle` y `RabbitMQ`. Los valores incluidos corresponden al entorno local de la prueba. Se pueden reemplazar con variables como `ConnectionStrings__Oracle` y `RabbitMQ__HostName`.
 
-Respuesta HTTP 200:
+## Swagger
 
-```json
-{"mensaje":"La API está funcionando"}
-```
+Con la API ejecutándose:
 
-## Visual Studio Code
+- [Swagger UI](http://localhost:5080/swagger): permite probar los endpoints.
+- [Documento OpenAPI](http://localhost:5080/swagger/v1/swagger.json): contiene la documentación en JSON.
 
-Abrir esta carpeta completa en VS Code. Con la extensión C# de Microsoft, presionar F5 para ejecutar y depurar. Las rutas de compilación y depuración ya apuntan a la estructura nueva.
+También dejé ejemplos de peticiones en `PruebaTecnica.Api.http`.
 
-El archivo `PruebaTecnica.Api.http` mantiene la petición de ejemplo. Swagger y las demás operaciones se agregarán después.
+## Endpoints
 
-## Listado paginado
+| Método | Ruta | Qué hace | Respuesta correcta |
+| --- | --- | --- | --- |
+| GET | `/api/prueba` | Comprueba que la API funciona | 200 |
+| GET | `/api/datos?pagina=1` | Lista los registros de 20 en 20 | 200 |
+| GET | `/api/datos/{id}` | Consulta un registro por ID | 200 |
+| POST | `/api/datos` | Crea un registro y devuelve su ID | 201 |
+| PUT | `/api/datos/{id}` | Actualiza un registro | 204 |
+| DELETE | `/api/datos/{id}` | Elimina un registro | 204 |
 
-Con los contenedores levantados y el script `GW/02_agregar_sp_listar_paginado.sql` aplicado, iniciar la API y consultar:
+El listado devuelve la página actual, el tamaño de página, el total de registros y el total de páginas. Cada registro incluye `totalCodigo`. Si no se indica página, se usa la 1. Si supera la última, devuelve una lista vacía con los totales.
 
-```bash
-curl -i 'http://localhost:5080/api/datos?pagina=1'
-```
+Los registros se ordenan por fecha e ID, del más reciente al más antiguo. El total y la página se consultan por separado; si se agregan o eliminan datos al mismo tiempo, pueden reflejar momentos distintos.
 
-La respuesta incluye `items`, `paginaActual`, `tamanoPagina` (siempre 20), `totalRegistros` y `totalPaginas`. Cada registro incluye `totalCodigo`. Se ordena por fecha e ID descendentes.
+## Crear y actualizar
 
-- Sin parámetro, devuelve la página 1.
-- Página cero, negativa, decimal o texto: HTTP 400 con `ValidationProblemDetails`.
-- Página fuera del rango: HTTP 200 con lista vacía y los totales.
-- Error de Oracle u otro error interno: HTTP 500 con `ProblemDetails`, sin detalles de la conexión. El error se registra en el servidor.
-
-La conexión local está en `ConnectionStrings:Oracle` de `appsettings.json`, con las credenciales del entorno de la prueba. Se puede reemplazar con la variable de entorno `ConnectionStrings__Oracle`.
-
-El flujo es `DatosController` → `IListarDatos` / `ListarDatos` → `IDatosRepository` / `OracleDatosRepository` → `PKG_DATOS.SP_LISTAR_PAGINADO`. Solo se reciben las filas de la página desde Oracle. Las fechas conservan el valor de `TIMESTAMP`, sin asignar una zona horaria que la base no almacena.
-
-El total y los registros se consultan por separado dentro del procedimiento; con escrituras concurrentes pueden reflejar momentos diferentes.
-
-## Consulta por ID
-
-```bash
-curl -i http://localhost:5080/api/datos/1
-```
-
-`GET /api/datos/{id}` ejecuta `PKG_DATOS.SP_OBTENER` y devuelve ID, código, secuencia, fecha de recepción, peso y descripción. `totalCodigo` corresponde solo al listado.
-
-- ID existente: HTTP 200.
-- ID inexistente: HTTP 404 con `ProblemDetails`.
-- ID cero, negativo, decimal, texto o fuera del rango de un entero de 64 bits: HTTP 400 con `ValidationProblemDetails`, antes de acceder al repositorio.
-- Error interno: HTTP 500 con `ProblemDetails`.
-
-La operación está documentada en Swagger (`/swagger`) y en el documento OpenAPI (`/swagger/v1/swagger.json`). No requiere cambios en el package.
-
-## Actualización completa (PUT)
-
-`PUT /api/datos/{id}` llama a `PKG_DATOS.SP_ACTUALIZAR` y confirma la transacción si termina correctamente. Permite cambiar código, secuencia, fecha, peso y descripción. No publica mensajes en RabbitMQ.
-
-```json
-{
-  "codigo": "COD-00001",
-  "secuencia": 1,
-  "fechaRecepcion": "2026-11-26T12:00:00",
-  "peso": 120.5,
-  "descripcion": "Descripción actualizada"
-}
-```
-
-Todos los campos son obligatorios salvo descripción. Omitirla o enviar null la borra. La fecha se envía sin zona horaria. Código admite 32 bytes UTF-8, descripción hasta 320 caracteres y peso hasta 15 dígitos enteros y 4 decimales. Secuencia usa un entero de 64 bits.
-
-Respuestas: 204 actualizado, 400 entrada inválida, 404 inexistente, 409 código y secuencia duplicados, 415 formato distinto de JSON y 500 error interno. Los errores usan ProblemDetails. La operación está disponible en Swagger.
-
-Pendiente: este PUT permite actualizar todos los campos. La restricción del punto 8 (modificar solo descripción) se implementará por separado.
-
-## Crear un registro
-
-`POST /api/datos` llama a `PKG_DATOS.SP_INSERTAR`. Oracle obtiene el ID de `SEQ_DATOS`; la API confirma la transacción antes de devolver HTTP 201 con `{"id": 100123}` y la cabecera `Location` para consultar el registro.
+Este es un ejemplo del JSON para POST y PUT:
 
 ```json
 {
   "codigo": "NUEVO-001",
   "secuencia": 1,
   "fechaRecepcion": "2026-11-26T12:00:00",
-  "peso": 90.25,
-  "descripcion": "Registro nuevo"
+  "peso": 120.5,
+  "descripcion": "Registro de prueba"
 }
 ```
 
-Se aplican las mismas validaciones de campos que en el PUT. No se envía ID. La descripción puede omitirse o enviarse como null.
+Todos los campos son obligatorios salvo la descripción. Esta acepta hasta 320 caracteres; en el PUT, omitirla o enviar `null` la borra.
 
-Respuestas: 201 creado, 400 datos inválidos, 409 código y secuencia duplicados, 415 formato distinto de JSON y 500 error interno. Los errores usan ProblemDetails. Un conflicto no deja una nueva fila, aunque la secuencia puede consumir un número.
+El código admite hasta 32 bytes UTF-8. La secuencia es un entero de 64 bits, la fecha se envía sin zona horaria y el peso admite hasta 15 dígitos enteros y 4 decimales.
 
-El POST publica directamente en RabbitMQ cuando el peso supera 100,64, después de confirmar la inserción.
+El POST obtiene el ID de la secuencia de Oracle y confirma la transacción antes de responder. Devuelve el ID y la cabecera `Location`, con la URL para consultar el registro. El ID no se envía en el cuerpo de la petición.
 
-## RabbitMQ: publicación directa
+## Errores
 
-El POST llama a `PKG_DATOS.SP_INSERTAR` y confirma la transacción. Si el peso es mayor que `100.64`, el caso de uso `CrearDato` publica `{"id":100123}` en `pesos_especiales` mediante `RabbitMQ.Client`. No llama a ningún package adicional ni guarda pendientes.
+Los errores se devuelven en formato `ProblemDetails`:
 
-El mensaje usa `application/json`, persistencia y confirmación del broker. La cola durable ya viene creada en el entorno. El publicador reutiliza la conexión y serializa el uso del canal para permitir peticiones concurrentes.
+- **400:** datos, ID o página inválidos.
+- **404:** el registro solicitado no existe.
+- **409:** ya existe otro registro con el mismo código y secuencia.
+- **415:** el POST o PUT no se envió como JSON.
+- **500:** error interno. El detalle queda en el log del servidor.
 
-Si RabbitMQ falla, el dato permanece guardado y el POST responde 201 con el ID y Location. El error se registra en el log. El envío dispone de un token con límite de 15 segundos; el POST espera el intento de publicación. No hay reintentos automáticos ni recuperación de mensajes después de reiniciar. Un error de confirmación no permite asegurar si el mensaje llegó. Una caída entre el commit y el envío también puede perder la notificación.
+## RabbitMQ
 
-Las siguientes peticiones intentan reconectarse si la conexión anterior falló. El PUT, DELETE, pesos iguales o inferiores a 100,64 e inserciones fallidas no publican mensajes.
+Después de guardar un registro, si el peso es mayor que `100.64`, la API envía su ID a la cola `pesos_especiales`:
 
-La configuración está en `RabbitMQ` de `appsettings.json`. Puede reemplazarse con variables de entorno, por ejemplo `RabbitMQ__HostName`. La consola está en http://localhost:15672, con usuario y contraseña `prueba`.
+```json
+{"id":100123}
+```
 
-Para una instalación nueva solo se requieren los scripts 01 y 02 de GW después de levantar el entorno. No se necesita el script de outbox. Si sus objetos ya existen en Oracle, esta API no los usa y no procesa los pendientes antiguos.
+El mensaje es persistente, usa `application/json` y se espera la confirmación de RabbitMQ. El envío se hace directamente desde C#, sin llamar a un package adicional ni guardar notificaciones pendientes.
+
+Si RabbitMQ falla, el dato queda guardado y el POST responde 201. El error queda en el log. No hay reenvío automático, por lo que la notificación podría perderse. Si falla la confirmación, no se puede asegurar si el mensaje llegó.
+
+Solo se publica al crear. El PUT, el DELETE, las inserciones fallidas y los pesos iguales o menores que 100,64 no generan mensajes.
+
+Los mensajes se pueden revisar en la [consola de RabbitMQ](http://localhost:15672), con usuario y contraseña `prueba`.
+
+## Pendientes
+
+- Aplicar el punto 8: permitir actualizar solo la descripción y rechazar otros campos antes de acceder a Oracle. Actualmente el PUT permite modificar todos los campos del ejemplo.
+- Completar los comentarios XML que todavía generan advertencias al compilar.
+
+## Pruebas unitarias
+
+Agregué el proyecto `tests/PruebaTecnica.Application.Tests` con xUnit. Para ejecutarlo desde esta carpeta:
+
+```bash
+dotnet test PruebaTecnica.sln
+```
